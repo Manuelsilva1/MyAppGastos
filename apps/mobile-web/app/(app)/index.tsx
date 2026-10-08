@@ -8,7 +8,8 @@ import { MonthSummary } from '../../src/features/dashboard/components/MonthSumma
 import { NetWorthCard } from '../../src/features/dashboard/components/NetWorthCard';
 import { RecentList } from '../../src/features/dashboard/components/RecentList';
 import { UpcomingList } from '../../src/features/dashboard/components/UpcomingList';
-import { isDemoMode, useDashboard } from '../../src/features/dashboard/useDashboard';
+import { useDashboard } from '../../src/features/dashboard/useDashboard';
+import { IS_DEMO } from '../../src/lib/config';
 import { Skeleton } from '../../src/components/ui';
 
 function HomeSkeleton() {
@@ -29,7 +30,7 @@ export default function HomeScreen() {
 
   return (
     <Page>
-      {isDemoMode ? (
+      {IS_DEMO ? (
         <Text className="rounded-input bg-pending/25 px-3 py-2 font-sans text-caption text-text">
           Datos de ejemplo: la API todavía no está conectada.
         </Text>

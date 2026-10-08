@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { AccessibilityInfo, Animated, Easing, Modal, Platform, Pressable, View, useWindowDimensions } from 'react-native';
+import { AccessibilityInfo, Animated, Easing, Modal, Platform, Pressable, ScrollView, View, useWindowDimensions } from 'react-native';
+import { useThemeColors } from '../../theme';
 
 export interface BottomSheetProps {
   visible: boolean;
@@ -19,6 +20,7 @@ const WEB_DIALOG_MIN_WIDTH = 1024; // en web ≥ 1024 px el sheet es un modal ce
 export function BottomSheet({ visible, onClose, children, accessibilityLabel }: BottomSheetProps) {
   const { width } = useWindowDimensions();
   const asDialog = Platform.OS === 'web' && width >= WEB_DIALOG_MIN_WIDTH;
+  const colors = useThemeColors();
   const [mounted, setMounted] = useState(visible);
   const progress = useRef(new Animated.Value(visible ? 1 : 0)).current;
   const reduceMotion = useRef(false);
@@ -55,19 +57,26 @@ export function BottomSheet({ visible, onClose, children, accessibilityLabel }: 
   return (
     <Modal transparent visible={mounted} animationType="none" onRequestClose={onClose} statusBarTranslucent>
       <View className={`flex-1 ${asDialog ? 'items-center justify-center' : 'justify-end'}`}>
-        <Animated.View style={{ opacity }} className="absolute inset-0 bg-black/40">
+        {/* Animated.View recibe estilos inline: NativeWind no aplica className sobre Animated. */}
+        <Animated.View style={{ opacity, position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: 'rgba(0,0,0,0.4)' }}>
           <Pressable accessibilityRole="button" accessibilityLabel="Cerrar" className="flex-1" onPress={onClose} />
         </Animated.View>
         <Animated.View
           accessibilityViewIsModal
           accessibilityLabel={accessibilityLabel}
           style={{ transform: [{ translateY }], opacity }}
-          className={`bg-surface border border-border px-4 pb-8 pt-3 shadow-sm ${
-            asDialog ? 'w-[520px] rounded-sheet' : 'w-full rounded-t-sheet'
-          }`}
+          className={asDialog ? 'w-[520px]' : 'w-full'}
         >
-          {!asDialog ? <View className="mb-3 h-1 w-10 self-center rounded-full bg-border" /> : null}
-          {children}
+          <View
+            style={{ backgroundColor: colors.surface, borderColor: colors.border }}
+            className={`max-h-[90%] border px-4 pb-6 pt-3 shadow-sm ${asDialog ? 'rounded-sheet' : 'rounded-t-sheet'}`}
+          >
+            {!asDialog ? <View className="mb-3 h-1 w-10 self-center rounded-full bg-border" /> : null}
+            {/* Si el contenido no entra en pantalla, el sheet se desplaza en lugar de salirse. */}
+            <ScrollView style={{ flexShrink: 1 }} contentContainerStyle={{ paddingBottom: 8 }} keyboardShouldPersistTaps="handled">
+              {children}
+            </ScrollView>
+          </View>
         </Animated.View>
       </View>
     </Modal>

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { AccessibilityInfo, Animated, Easing, type DimensionValue, View } from 'react-native';
+import { useThemeColors } from '../../theme';
 
 export interface SkeletonProps {
   width?: DimensionValue;
@@ -11,6 +12,7 @@ export interface SkeletonProps {
 /** Placeholder con la forma del contenido. Pulsa suavemente salvo con "reducir movimiento". */
 export function Skeleton({ width = '100%', height = 16, radius = 10 }: SkeletonProps) {
   const pulse = useRef(new Animated.Value(0.5)).current;
+  const colors = useThemeColors();
 
   useEffect(() => {
     let loop: Animated.CompositeAnimation | undefined;
@@ -35,8 +37,7 @@ export function Skeleton({ width = '100%', height = 16, radius = 10 }: SkeletonP
     <Animated.View
       accessibilityElementsHidden
       importantForAccessibility="no-hide-descendants"
-      style={{ width, height, borderRadius: radius, opacity: pulse }}
-      className="bg-surface-2"
+      style={{ width, height, borderRadius: radius, opacity: pulse, backgroundColor: colors['surface-2'] }}
     >
       <View />
     </Animated.View>
