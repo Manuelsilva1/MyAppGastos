@@ -1,0 +1,36 @@
+# Desarrollo local: base de datos PostgreSQL 16 y API Spring Boot.
+#   docker compose up --build
+# La API queda en http://localhost:8080/api/v1 y la base en localhost:5432.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: finanzas
+      POSTGRES_USER: finanzas
+      POSTGRES_PASSWORD: finanzas
+    ports:
+      - "5432:5432"
+    volumes:
+      - finanzas-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U finanzas -d finanzas"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: ./apps/api
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/finanzas
+      SPRING_DATASOURCE_USERNAME: finanzas
+      SPRING_DATASOURCE_PASSWORD: finanzas
+      # Cambiar en cualquier entorno compartido (mínimo 32 caracteres).
+      JWT_SECRET: ${JWT_SECRET:-dev-only-secret-cambiar-en-produccion-0123456789}
+    ports:
+      - "8080:8080"
+
+volumes:
+  finanzas-db:

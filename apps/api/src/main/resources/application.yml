@@ -1,0 +1,31 @@
+spring:
+  application:
+    name: finanzas-api
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/finanzas}
+    username: ${SPRING_DATASOURCE_USERNAME:finanzas}
+    password: ${SPRING_DATASOURCE_PASSWORD:finanzas}
+  flyway:
+    locations: classpath:db/migration
+  jpa:
+    open-in-view: false
+    # El esquema lo maneja Flyway; Hibernate no lo modifica.
+    hibernate:
+      ddl-auto: none
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+
+server:
+  port: ${PORT:8080}
+
+app:
+  base-path: /api/v1
+  cors:
+    # Orígenes de la web, separados por coma. Agregar el dominio de Vercel en producción.
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:8081,http://localhost:19006,http://localhost:8080}
+  jwt:
+    # Obligatorio en producción. El valor por defecto es solo para desarrollo local.
+    secret: ${JWT_SECRET:dev-only-secret-cambiar-en-produccion-0123456789}
+    access-ttl: 15m
+    refresh-ttl: 30d
