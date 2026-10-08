@@ -1,0 +1,2549 @@
+openapi: 3.0.3
+info:
+  title: Finanzas personales API
+  version: 0.1.0
+  description: |
+    ## Convenciones
+
+    - **Montos**: siempre strings decimales con punto y hasta 4 decimales (`"1234.5000"`). Nunca se envían como number JSON.
+    - **Signo**: en las requests de `EXPENSE` e `INCOME` se envía el monto **positivo** y el servidor guarda el signo (`EXPENSE` -> negativo). En `ADJUSTMENT` el monto va con signo. En las responses el `amount` siempre viene con el signo con que está guardado.
+    - **Fechas**: `YYYY-MM-DD` para fechas de negocio (`occurredOn`, `dueDate`), RFC 3339 para instantes (`createdAt`, `voidedAt`).
+    - **IDs**: UUID. Los `id` de `transactions`, `transfers` y `recurring-occurrences/{id}/confirm` (campo `transactionId`) los genera el cliente.
+    - **Idempotencia**: crear un recurso con un `id` ya existente para el mismo usuario y con el mismo contenido responde `200` con el recurso original (no duplica). Si el contenido es distinto, responde `409` con `ID_REUSED_WITH_DIFFERENT_PAYLOAD`.
+    - **Concurrencia optimista**: las modificaciones y anulaciones exigen `version` (el valor que devolvió la última lectura). Si no coincide, `409` con `VERSION_CONFLICT`.
+    - **Paginación**: keyset. `limit` (default 50, máx. 200) y `cursor` opaco que devuelve la respuesta en `nextCursor`.
+    - **Errores**: RFC 7807 (`application/problem+json`), con un `code` estable para que el cliente decida qué hacer.
+    - **Multiusuario**: todo recurso se resuelve dentro del usuario autenticado. Un recurso de otro usuario responde `404`, nunca `403`.
+
+  contact:
+    name: Manuel Silva
+
+servers:
+  - url: http://localhost:8080/api/v1
+    description: Desarrollo local (Docker Compose)
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Auth
+    description: Registro, login, rotación y cierre de sesión.
+  - name: Usuario
+    description: Datos y preferencias del usuario autenticado.
+  - name: Monedas
+    description: Catálogo de monedas ISO 4217 disponibles.
+  - name: Cotizaciones
+    description: Tipos de cambio cargados a mano por fecha.
+  - name: Cuentas
+    description: Cuentas del usuario, saldo derivado y archivado.
+  - name: Categorías
+    description: Árbol de categorías de gasto e ingreso (máximo 2 niveles).
+  - name: Etiquetas
+    description: Etiquetas libres para movimientos.
+  - name: Movimientos
+    description: Gastos, ingresos y ajustes. Anulación sin borrado físico.
+  - name: Transferencias
+    description: Movimientos entre cuentas propias, con o sin cambio de moneda.
+  - name: Recurrentes
+    description: Reglas de gastos e ingresos fijos y sus ocurrencias.
+  - name: Dashboard
+    description: Resumen de la pantalla de inicio.
+
+paths:
+  # -------------------------------------------------------------------
+  # Auth
+  # -------------------------------------------------------------------
+  /auth/register:
+    post:
+      tags: [Auth]
+      operationId: register
+      summary: Crear usuario y sesión
+      description: Crea el usuario, carga las categorías por defecto y devuelve tokens.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: Usuario creado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '409':
+          description: El email ya está registrado.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                type: https://api.finanzas.local/problems/duplicate-email
+                title: Email ya registrado
+                status: 409
+                code: DUPLICATE_EMAIL
+                detail: Ya existe un usuario con ese email.
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      operationId: login
+      summary: Iniciar sesión
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Sesión iniciada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '401':
+          $ref: '#/components/responses/InvalidCredentials'
+
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      operationId: refresh
+      summary: Rotar el refresh token
+      description: Invalida el refresh token recibido y devuelve un par nuevo. Reusar un token ya rotado revoca la sesión.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        '200':
+          description: Tokens rotados.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '401':
+          description: Refresh token inválido, vencido o revocado.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                type: https://api.finanzas.local/problems/refresh-token-invalid
+                title: Refresh token inválido
+                status: 401
+                code: REFRESH_TOKEN_INVALID
+                detail: El refresh token está vencido o fue revocado.
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      operationId: logout
+      summary: Cerrar sesión
+      description: Revoca el refresh token indicado.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        '204':
+          description: Sesión cerrada.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # -------------------------------------------------------------------
+  # Usuario
+  # -------------------------------------------------------------------
+  /me:
+    get:
+      tags: [Usuario]
+      operationId: getMe
+      summary: Usuario autenticado
+      responses:
+        '200':
+          description: Usuario actual.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    patch:
+      tags: [Usuario]
+      operationId: updateMe
+      summary: Actualizar preferencias del usuario
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserUpdate'
+      responses:
+        '200':
+          description: Usuario actualizado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # -------------------------------------------------------------------
+  # Monedas y cotizaciones
+  # -------------------------------------------------------------------
+  /currencies:
+    get:
+      tags: [Monedas]
+      operationId: listCurrencies
+      summary: Monedas disponibles
+      responses:
+        '200':
+          description: Lista de monedas.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Currency'
+              example:
+                items:
+                  - code: UYU
+                    name: Peso uruguayo
+                    symbol: '$'
+                    decimals: 2
+                  - code: USD
+                    name: Dólar estadounidense
+                    symbol: US$
+                    decimals: 2
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /exchange-rates:
+    get:
+      tags: [Cotizaciones]
+      operationId: listExchangeRates
+      summary: Cotizaciones cargadas
+      parameters:
+        - name: fromCurrency
+          in: query
+          schema:
+            $ref: '#/components/schemas/CurrencyCode'
+        - name: toCurrency
+          in: query
+          schema:
+            $ref: '#/components/schemas/CurrencyCode'
+        - name: to
+          in: query
+          description: Fecha máxima inclusive (`rateDate <= to`).
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: Cotizaciones ordenadas por `rateDate` descendente.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ExchangeRate'
+              example:
+                items:
+                  - id: 7d1e2c3a-5b4f-4e8a-9c6d-1a2b3c4d5e6f
+                    fromCurrency: USD
+                    toCurrency: UYU
+                    rate: '40.12500000'
+                    rateDate: '2026-10-07'
+                    source: MANUAL
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    put:
+      tags: [Cotizaciones]
+      operationId: upsertExchangeRate
+      summary: Cargar o corregir una cotización
+      description: Upsert por (`fromCurrency`, `toCurrency`, `rateDate`). Es idempotente.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExchangeRateUpsert'
+      responses:
+        '200':
+          description: Cotización guardada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExchangeRate'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # -------------------------------------------------------------------
+  # Cuentas
+  # -------------------------------------------------------------------
+  /accounts:
+    get:
+      tags: [Cuentas]
+      operationId: listAccounts
+      summary: Cuentas del usuario con su saldo derivado
+      parameters:
+        - name: includeArchived
+          in: query
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Cuentas ordenadas por `sortOrder`.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Account'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [Cuentas]
+      operationId: createAccount
+      summary: Crear cuenta
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountCreate'
+            example:
+              name: Santander caja de ahorro
+              type: BANK
+              currency: UYU
+              initialBalance: '15000.00'
+              initialBalanceDate: '2026-01-01'
+              color: green
+              icon: landmark
+              includeInTotal: true
+              sortOrder: 1
+      responses:
+        '201':
+          description: Cuenta creada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+              example:
+                id: 3f9a1c2e-8b7d-4c6e-a5f4-0d1e2f3a4b5c
+                name: Santander caja de ahorro
+                type: BANK
+                currency: UYU
+                initialBalance: '15000.0000'
+                initialBalanceDate: '2026-01-01'
+                color: green
+                icon: landmark
+                includeInTotal: true
+                sortOrder: 1
+                archivedAt: null
+                balance: '15000.0000'
+                version: 0
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/DuplicateName'
+
+  /accounts/{accountId}:
+    parameters:
+      - $ref: '#/components/parameters/AccountId'
+    get:
+      tags: [Cuentas]
+      operationId: getAccount
+      summary: Detalle de cuenta
+      responses:
+        '200':
+          description: Cuenta.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [Cuentas]
+      operationId: updateAccount
+      summary: Editar cuenta
+      description: |
+        La moneda solo puede cambiarse si la cuenta no tiene movimientos (si los tiene, `422 DOMAIN_RULE_VIOLATION`).
+        El saldo no se edita directamente: para corregirlo se usa conciliación con un `ADJUSTMENT`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountUpdate'
+      responses:
+        '200':
+          description: Cuenta actualizada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/VersionConflict'
+        '422':
+          $ref: '#/components/responses/DomainRuleViolation'
+
+  /accounts/{accountId}/archive:
+    parameters:
+      - $ref: '#/components/parameters/AccountId'
+    post:
+      tags: [Cuentas]
+      operationId: archiveAccount
+      summary: Archivar cuenta
+      description: Conserva el historial. Una cuenta archivada no admite movimientos nuevos.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VersionRequest'
+      responses:
+        '200':
+          description: Cuenta archivada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/VersionConflict'
+
+  /accounts/{accountId}/unarchive:
+    parameters:
+      - $ref: '#/components/parameters/AccountId'
+    post:
+      tags: [Cuentas]
+      operationId: unarchiveAccount
+      summary: Desarchivar cuenta
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VersionRequest'
+      responses:
+        '200':
+          description: Cuenta reactivada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/DuplicateName'
+
+  # -------------------------------------------------------------------
+  # Categorías y etiquetas
+  # -------------------------------------------------------------------
+  /categories:
+    get:
+      tags: [Categorías]
+      operationId: listCategories
+      summary: Árbol de categorías
+      parameters:
+        - name: kind
+          in: query
+          schema:
+            $ref: '#/components/schemas/CategoryKind'
+        - name: includeArchived
+          in: query
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Categorías planas; cada subcategoría apunta a su padre con `parentId`.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Category'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [Categorías]
+      operationId: createCategory
+      summary: Crear categoría o subcategoría
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CategoryCreate'
+            example:
+              parentId: 9b2f4d6e-1a3c-4b5d-8e7f-0a1b2c3d4e5f
+              name: Carnes
+              kind: EXPENSE
+              icon: beef
+      responses:
+        '201':
+          description: Categoría creada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Category'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/DuplicateName'
+        '422':
+          $ref: '#/components/responses/DomainRuleViolation'
+
+  /categories/{categoryId}:
+    parameters:
+      - $ref: '#/components/parameters/CategoryId'
+    get:
+      tags: [Categorías]
+      operationId: getCategory
+      summary: Detalle de categoría
+      responses:
+        '200':
+          description: Categoría.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Category'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [Categorías]
+      operationId: updateCategory
+      summary: Editar categoría
+      description: No se puede cambiar `kind` de una categoría que tiene subcategorías, ni convertir en subcategoría a una que ya tiene hijas.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CategoryUpdate'
+      responses:
+        '200':
+          description: Categoría actualizada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Category'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/DuplicateName'
+        '422':
+          $ref: '#/components/responses/DomainRuleViolation'
+
+  /categories/{categoryId}/archive:
+    parameters:
+      - $ref: '#/components/parameters/CategoryId'
+    post:
+      tags: [Categorías]
+      operationId: archiveCategory
+      summary: Archivar categoría
+      responses:
+        '200':
+          description: Categoría archivada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Category'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /tags:
+    get:
+      tags: [Etiquetas]
+      operationId: listTags
+      summary: Etiquetas del usuario
+      responses:
+        '200':
+          description: Etiquetas.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Tag'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [Etiquetas]
+      operationId: createTag
+      summary: Crear etiqueta
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TagCreate'
+      responses:
+        '201':
+          description: Etiqueta creada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tag'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/DuplicateName'
+
+  # -------------------------------------------------------------------
+  # Movimientos
+  # -------------------------------------------------------------------
+  /transactions:
+    get:
+      tags: [Movimientos]
+      operationId: listTransactions
+      summary: Listado de movimientos (keyset)
+      description: |
+        Orden: `occurredOn` descendente y luego `id`. Las transferencias aparecen como sus dos movimientos (`TRANSFER_OUT` y `TRANSFER_IN`) y no cuentan en totales de gastos ni ingresos.
+        Por defecto no incluye los anulados.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: accountId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: categoryId
+          in: query
+          description: Incluye las subcategorías de la categoría indicada.
+          schema:
+            type: string
+            format: uuid
+        - name: tagId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: type
+          in: query
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/TransactionType'
+          style: form
+          explode: false
+        - name: q
+          in: query
+          description: Búsqueda por texto en descripción y nota.
+          schema:
+            type: string
+            maxLength: 100
+        - name: includeVoided
+          in: query
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Página de movimientos.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionPage'
+              example:
+                items:
+                  - id: 5c8e1f2a-3b4d-4e5f-8a9b-0c1d2e3f4a5b
+                    accountId: 3f9a1c2e-8b7d-4c6e-a5f4-0d1e2f3a4b5c
+                    type: EXPENSE
+                    amount: '-450.0000'
+                    categoryId: 1e2d3c4b-5a69-4788-9900-aabbccddeeff
+                    transferId: null
+                    recurringOccurrenceId: null
+                    description: Supermercado Tienda Inglesa
+                    note: null
+                    occurredOn: '2026-10-07'
+                    tagIds: []
+                    voidedAt: null
+                    voidReason: null
+                    version: 0
+                    createdAt: '2026-10-07T21:14:03Z'
+                    updatedAt: '2026-10-07T21:14:03Z'
+                nextCursor: eyJvIjoiMjAyNi0xMC0wNyIsImkiOiI1YzhlIn0
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [Movimientos]
+      operationId: createTransaction
+      summary: Registrar gasto, ingreso o ajuste
+      description: |
+        Idempotente por `id` (generado por el cliente). Las transferencias se crean con `POST /transfers`, no acá.
+        Para `EXPENSE` e `INCOME` el `amount` es positivo. Para `ADJUSTMENT` va con signo y distinto de cero.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransactionCreate'
+            examples:
+              gasto:
+                summary: Gasto desde el celular
+                value:
+                  id: 5c8e1f2a-3b4d-4e5f-8a9b-0c1d2e3f4a5b
+                  accountId: 3f9a1c2e-8b7d-4c6e-a5f4-0d1e2f3a4b5c
+                  type: EXPENSE
+                  amount: '450.00'
+                  categoryId: 1e2d3c4b-5a69-4788-9900-aabbccddeeff
+                  occurredOn: '2026-10-07'
+              ajuste:
+                summary: Conciliación
+                value:
+                  id: 6d9f2a3b-4c5e-4f60-9b0c-1d2e3f4a5b6c
+                  accountId: 3f9a1c2e-8b7d-4c6e-a5f4-0d1e2f3a4b5c
+                  type: ADJUSTMENT
+                  amount: '-120.5000'
+                  description: Diferencia de conciliación
+                  occurredOn: '2026-10-07'
+      responses:
+        '201':
+          description: Movimiento creado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transaction'
+              example:
+                id: 5c8e1f2a-3b4d-4e5f-8a9b-0c1d2e3f4a5b
+                accountId: 3f9a1c2e-8b7d-4c6e-a5f4-0d1e2f3a4b5c
+                type: EXPENSE
+                amount: '-450.0000'
+                categoryId: 1e2d3c4b-5a69-4788-9900-aabbccddeeff
+                transferId: null
+                recurringOccurrenceId: null
+                description: null
+                note: null
+                occurredOn: '2026-10-07'
+                tagIds: []
+                voidedAt: null
+                voidReason: null
+                version: 0
+                createdAt: '2026-10-07T21:14:03Z'
+                updatedAt: '2026-10-07T21:14:03Z'
+        '200':
+          description: Ya existía un movimiento con ese `id` y el mismo contenido (reintento de la cola offline). No se duplica.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transaction'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/IdReusedWithDifferentPayload'
+        '422':
+          $ref: '#/components/responses/DomainRuleViolation'
+
+  /transactions/{transactionId}:
+    parameters:
+      - $ref: '#/components/parameters/TransactionId'
+    get:
+      tags: [Movimientos]
+      operationId: getTransaction
+      summary: Detalle de movimiento
+      responses:
+        '200':
+          description: Movimiento.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transaction'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [Movimientos]
+      operationId: updateTransaction
+      summary: Editar movimiento
+      description: |
+        No se edita el `type`: para cambiarlo, anular el movimiento y crear otro.
+        Los movimientos de transferencia no se editan: se anula la transferencia completa y se crea otra.
+        No se edita un movimiento anulado.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransactionUpdate'
+      responses:
+        '200':
+          description: Movimiento actualizado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transaction'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/VersionConflict'
+        '422':
+          $ref: '#/components/responses/DomainRuleViolation'
+
+  /transactions/{transactionId}/void:
+    parameters:
+      - $ref: '#/components/parameters/TransactionId'
+    post:
+      tags: [Movimientos]
+      operationId: voidTransaction
+      summary: Anular movimiento
+      description: |
+        Soft delete: marca `voidedAt`, no borra. Queda registrado en la auditoría con el valor anterior y el nuevo.
+        No aplica a movimientos de transferencia: para esos se anula la transferencia completa.
+        Anular un movimiento confirmado desde una ocurrencia recurrente no la vuelve a `PENDING` automáticamente.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VoidRequest'
+            example:
+              version: 0
+              reason: Cargado por error
+      responses:
+        '200':
+          description: Movimiento anulado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transaction'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/VersionConflict'
+        '422':
+          $ref: '#/components/responses/DomainRuleViolation'
+
+  # -------------------------------------------------------------------
+  # Transferencias
+  # -------------------------------------------------------------------
+  /transfers:
+    post:
+      tags: [Transferencias]
+      operationId: createTransfer
+      summary: Crear transferencia entre cuentas propias
+      description: |
+        Crea la transferencia y sus dos movimientos (`TRANSFER_OUT` y `TRANSFER_IN`) en una sola transacción de base de datos.
+        Idempotente por `id`. Si las cuentas tienen la misma moneda, `exchangeRate` debe omitirse y `toAmount` = `fromAmount`.
+        La comisión, si existe, se registra aparte como `EXPENSE`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransferCreate'
+            examples:
+              misma_moneda:
+                summary: Entre cuentas en UYU
+                value:
+                  id: 8a7b6c5d-4e3f-4a2b-9c1d-0e9f8a7b6c5d
+                  fromAccountId: 3f9a1c2e-8b7d-4c6e-a5f4-0d1e2f3a4b5c
+                  toAccountId: 4a0b1c2d-3e4f-4051-8263-74859a6b7c8d
+                  fromAmount: '5000.00'
+                  toAmount: '5000.00'
+                  occurredOn: '2026-10-07'
+                  description: Pasé plata a efectivo
+              distinta_moneda:
+                summary: UYU a USD
+                value:
+                  id: 9b8c7d6e-5f4a-4b3c-8d2e-1f0a9b8c7d6e
+                  fromAccountId: 3f9a1c2e-8b7d-4c6e-a5f4-0d1e2f3a4b5c
+                  toAccountId: 5b1c2d3e-4f50-4162-8374-85a6b7c8d9e0
+                  fromAmount: '40125.00'
+                  toAmount: '1000.00'
+                  exchangeRate: '40.12500000'
+                  occurredOn: '2026-10-07'
+      responses:
+        '201':
+          description: Transferencia creada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transfer'
+              example:
+                id: 9b8c7d6e-5f4a-4b3c-8d2e-1f0a9b8c7d6e
+                fromAccountId: 3f9a1c2e-8b7d-4c6e-a5f4-0d1e2f3a4b5c
+                toAccountId: 5b1c2d3e-4f50-4162-8374-85a6b7c8d9e0
+                fromAmount: '40125.0000'
+                toAmount: '1000.0000'
+                exchangeRate: '40.12500000'
+                occurredOn: '2026-10-07'
+                description: null
+                voidedAt: null
+                outTransactionId: 0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d
+                inTransactionId: 1b2c3d4e-5f60-4b7c-8d9e-0f1a2b3c4d5e
+                version: 0
+                createdAt: '2026-10-07T21:20:11Z'
+        '200':
+          description: Ya existía la transferencia con ese `id` y el mismo contenido.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transfer'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/IdReusedWithDifferentPayload'
+        '422':
+          $ref: '#/components/responses/DomainRuleViolation'
+
+  /transfers/{transferId}:
+    parameters:
+      - $ref: '#/components/parameters/TransferId'
+    get:
+      tags: [Transferencias]
+      operationId: getTransfer
+      summary: Detalle de transferencia
+      responses:
+        '200':
+          description: Transferencia.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transfer'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /transfers/{transferId}/void:
+    parameters:
+      - $ref: '#/components/parameters/TransferId'
+    post:
+      tags: [Transferencias]
+      operationId: voidTransfer
+      summary: Anular transferencia
+      description: Anula la transferencia y sus dos movimientos en la misma transacción de base de datos.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VoidRequest'
+      responses:
+        '200':
+          description: Transferencia anulada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transfer'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/VersionConflict'
+
+  # -------------------------------------------------------------------
+  # Recurrentes
+  # -------------------------------------------------------------------
+  /recurring-rules:
+    get:
+      tags: [Recurrentes]
+      operationId: listRecurringRules
+      summary: Reglas recurrentes
+      parameters:
+        - name: active
+          in: query
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: Reglas.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/RecurringRule'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [Recurrentes]
+      operationId: createRecurringRule
+      summary: Crear regla recurrente
+      description: Al crearla se generan las ocurrencias de los próximos 30 días (también lo hace el job diario).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecurringRuleCreate'
+            example:
+              name: Alquiler
+              kind: EXPENSE
+              accountId: 3f9a1c2e-8b7d-4c6e-a5f4-0d1e2f3a4b5c
+              categoryId: 2c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f
+              amount: '28000.00'
+              isEstimate: false
+              frequency: MONTHLY
+              dayOfMonth: 31
+              startDate: '2026-01-31'
+              autoConfirm: false
+      responses:
+        '201':
+          description: Regla creada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecurringRule'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/DomainRuleViolation'
+
+  /recurring-rules/{ruleId}:
+    parameters:
+      - $ref: '#/components/parameters/RuleId'
+    get:
+      tags: [Recurrentes]
+      operationId: getRecurringRule
+      summary: Detalle de regla
+      responses:
+        '200':
+          description: Regla.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecurringRule'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [Recurrentes]
+      operationId: updateRecurringRule
+      summary: Editar o pausar regla
+      description: |
+        Los cambios afectan solo a las ocurrencias futuras en `PENDING`; las ya confirmadas o omitidas no se tocan.
+        Pausar con `active: false` deja de generar ocurrencias nuevas.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecurringRuleUpdate'
+      responses:
+        '200':
+          description: Regla actualizada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecurringRule'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/VersionConflict'
+        '422':
+          $ref: '#/components/responses/DomainRuleViolation'
+
+  /recurring-occurrences:
+    get:
+      tags: [Recurrentes]
+      operationId: listRecurringOccurrences
+      summary: Ocurrencias (pendientes, vencidas y resueltas)
+      description: Por defecto devuelve las `PENDING` con `dueDate` en los próximos 30 días y las vencidas sin resolver.
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/OccurrenceStatus'
+        - name: dueFrom
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: dueTo
+          in: query
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: Ocurrencias ordenadas por `dueDate` ascendente.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/RecurringOccurrence'
+              example:
+                items:
+                  - id: 2e3f4a5b-6c7d-4e8f-9a0b-1c2d3e4f5a6b
+                    ruleId: 2c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f
+                    ruleName: Alquiler
+                    kind: EXPENSE
+                    dueDate: '2026-10-31'
+                    expectedAmount: '28000.0000'
+                    isEstimate: false
+                    status: PENDING
+                    overdue: false
+                    transactionId: null
+                    resolvedAt: null
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /recurring-occurrences/{occurrenceId}/confirm:
+    parameters:
+      - $ref: '#/components/parameters/OccurrenceId'
+    post:
+      tags: [Recurrentes]
+      operationId: confirmOccurrence
+      summary: Confirmar ocurrencia
+      description: |
+        Crea el movimiento y marca la ocurrencia como `CONFIRMED` en la misma transacción de base de datos.
+        Si la regla es `isEstimate`, el cliente debería enviar el monto real en `amount`. Sin `amount` se usa `expectedAmount`.
+        Idempotente por `transactionId` generado por el cliente: si la ocurrencia ya está confirmada con ese mismo `transactionId`, responde `200`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConfirmOccurrenceRequest'
+            example:
+              transactionId: 4c5d6e7f-8091-4a2b-8c3d-4e5f6a7b8c9d
+              amount: '28450.00'
+              occurredOn: '2026-10-31'
+      responses:
+        '201':
+          description: Ocurrencia confirmada y movimiento creado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfirmOccurrenceResponse'
+              example:
+                occurrence:
+                  id: 2e3f4a5b-6c7d-4e8f-9a0b-1c2d3e4f5a6b
+                  ruleId: 2c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f
+                  ruleName: Alquiler
+                  kind: EXPENSE
+                  dueDate: '2026-10-31'
+                  expectedAmount: '28000.0000'
+                  isEstimate: false
+                  status: CONFIRMED
+                  overdue: false
+                  transactionId: 4c5d6e7f-8091-4a2b-8c3d-4e5f6a7b8c9d
+                  resolvedAt: '2026-10-31T13:02:45Z'
+                transaction:
+                  id: 4c5d6e7f-8091-4a2b-8c3d-4e5f6a7b8c9d
+                  accountId: 3f9a1c2e-8b7d-4c6e-a5f4-0d1e2f3a4b5c
+                  type: EXPENSE
+                  amount: '-28450.0000'
+                  categoryId: 2c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f
+                  recurringOccurrenceId: 2e3f4a5b-6c7d-4e8f-9a0b-1c2d3e4f5a6b
+                  transferId: null
+                  description: null
+                  note: null
+                  occurredOn: '2026-10-31'
+                  tagIds: []
+                  voidedAt: null
+                  voidReason: null
+                  version: 0
+                  createdAt: '2026-10-31T13:02:45Z'
+                  updatedAt: '2026-10-31T13:02:45Z'
+        '200':
+          description: Ya estaba confirmada con ese mismo `transactionId`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfirmOccurrenceResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: La ocurrencia ya fue resuelta con otro movimiento, u omitida.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                type: https://api.finanzas.local/problems/occurrence-already-resolved
+                title: Ocurrencia ya resuelta
+                status: 409
+                code: OCCURRENCE_ALREADY_RESOLVED
+                detail: La ocurrencia ya fue confirmada u omitida.
+        '422':
+          $ref: '#/components/responses/DomainRuleViolation'
+
+  /recurring-occurrences/{occurrenceId}/skip:
+    parameters:
+      - $ref: '#/components/parameters/OccurrenceId'
+    post:
+      tags: [Recurrentes]
+      operationId: skipOccurrence
+      summary: Omitir ocurrencia
+      description: Marca la ocurrencia como `SKIPPED` sin crear movimiento.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VersionRequest'
+      responses:
+        '200':
+          description: Ocurrencia omitida.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecurringOccurrence'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: La ocurrencia ya fue resuelta.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
+  # -------------------------------------------------------------------
+  # Dashboard
+  # -------------------------------------------------------------------
+  /dashboard:
+    get:
+      tags: [Dashboard]
+      operationId: getDashboard
+      summary: Resumen de la pantalla de inicio
+      description: |
+        Patrimonio convertido a la moneda base con la cotización más reciente con `rateDate <= fecha consultada`.
+        Si falta una cotización, la cuenta no se suma y aparece en `missingRates` para que el cliente lo avise.
+        Las transferencias no cuentan en ingresos ni gastos.
+      parameters:
+        - name: month
+          in: query
+          description: Mes a resumir (`YYYY-MM`). Default, el mes actual.
+          schema:
+            type: string
+            pattern: '^\d{4}-(0[1-9]|1[0-2])$'
+      responses:
+        '200':
+          description: Resumen.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardSummary'
+              example:
+                month: '2026-10'
+                baseCurrency: UYU
+                netWorth:
+                  amount: '152340.5000'
+                  currency: UYU
+                  changeVsPreviousMonth: '4.2'
+                missingRates: []
+                thisMonth:
+                  income: '32000.0000'
+                  expense: '18450.5000'
+                  net: '13549.5000'
+                  topCategories:
+                    - categoryId: 1e2d3c4b-5a69-4788-9900-aabbccddeeff
+                      name: Supermercado
+                      amount: '6200.0000'
+                      share: '0.3361'
+                upcoming:
+                  - id: 2e3f4a5b-6c7d-4e8f-9a0b-1c2d3e4f5a6b
+                    ruleName: Alquiler
+                    dueDate: '2026-10-31'
+                    expectedAmount: '28000.0000'
+                    overdue: false
+                recentTransactions: []
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Access token JWT de corta duración (15 min). Se renueva con `/auth/refresh`.
+
+  parameters:
+    AccountId:
+      name: accountId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    CategoryId:
+      name: categoryId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    TransactionId:
+      name: transactionId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    TransferId:
+      name: transferId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    RuleId:
+      name: ruleId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    OccurrenceId:
+      name: occurrenceId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+    Cursor:
+      name: cursor
+      in: query
+      description: Cursor opaco devuelto en `nextCursor`.
+      schema:
+        type: string
+        maxLength: 512
+
+  schemas:
+    # ----- Tipos básicos -----
+    Money:
+      type: string
+      description: Monto decimal como string. Hasta 15 dígitos enteros y 4 decimales.
+      pattern: '^-?\d{1,15}(\.\d{1,4})?$'
+      example: '1234.5000'
+    PositiveMoney:
+      type: string
+      description: Monto mayor que cero, como string.
+      pattern: '^\d{1,15}(\.\d{1,4})?$'
+      example: '450.00'
+    Rate:
+      type: string
+      description: Tipo de cambio con hasta 8 decimales.
+      pattern: '^\d{1,11}(\.\d{1,8})?$'
+      example: '40.12500000'
+    CurrencyCode:
+      type: string
+      pattern: '^[A-Z]{3}$'
+      example: UYU
+    CategoryKind:
+      type: string
+      enum: [EXPENSE, INCOME]
+    AccountType:
+      type: string
+      enum: [CASH, BANK, CREDIT_CARD, WALLET, SAVINGS]
+    TransactionType:
+      type: string
+      enum: [EXPENSE, INCOME, TRANSFER_OUT, TRANSFER_IN, ADJUSTMENT]
+    RecurringFrequency:
+      type: string
+      enum: [WEEKLY, MONTHLY, YEARLY, EVERY_N_DAYS]
+    OccurrenceStatus:
+      type: string
+      enum: [PENDING, CONFIRMED, SKIPPED]
+    ExchangeRateSource:
+      type: string
+      enum: [MANUAL, API]
+    ColorKey:
+      type: string
+      description: Una de las 12 claves de la paleta de la app.
+      maxLength: 32
+      example: green
+    IconName:
+      type: string
+      description: Nombre de ícono de lucide.
+      maxLength: 40
+      example: landmark
+
+    # ----- Errores -----
+    Problem:
+      type: object
+      description: Problem Details (RFC 7807) con un `code` estable.
+      required: [type, title, status, code]
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+        code:
+          type: string
+          enum:
+            - VALIDATION_ERROR
+            - UNAUTHORIZED
+            - INVALID_CREDENTIALS
+            - REFRESH_TOKEN_INVALID
+            - DUPLICATE_EMAIL
+            - NOT_FOUND
+            - DUPLICATE_NAME
+            - VERSION_CONFLICT
+            - ID_REUSED_WITH_DIFFERENT_PAYLOAD
+            - OCCURRENCE_ALREADY_RESOLVED
+            - DOMAIN_RULE_VIOLATION
+            - INTERNAL_ERROR
+        detail:
+          type: string
+        instance:
+          type: string
+        errors:
+          type: array
+          description: Solo en `VALIDATION_ERROR`.
+          items:
+            type: object
+            required: [field, message]
+            properties:
+              field:
+                type: string
+                example: fromAmount
+              message:
+                type: string
+                example: debe ser mayor que cero
+
+    # ----- Auth y usuario -----
+    RegisterRequest:
+      type: object
+      required: [email, password, name]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        password:
+          type: string
+          minLength: 10
+          maxLength: 128
+          writeOnly: true
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        baseCurrency:
+          $ref: '#/components/schemas/CurrencyCode'
+        locale:
+          type: string
+          default: es-UY
+      example:
+        email: manuel@example.com
+        password: una-clave-larga-123
+        name: Manuel
+        baseCurrency: UYU
+        locale: es-UY
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          writeOnly: true
+      example:
+        email: manuel@example.com
+        password: una-clave-larga-123
+    RefreshRequest:
+      type: object
+      required: [refreshToken]
+      properties:
+        refreshToken:
+          type: string
+          writeOnly: true
+      example:
+        refreshToken: 3q7Yc0v8aZ1bKx2mTn5rW9pLf4dHsGjE
+    AuthResponse:
+      type: object
+      required: [accessToken, refreshToken, expiresIn, user]
+      properties:
+        accessToken:
+          type: string
+        refreshToken:
+          type: string
+        tokenType:
+          type: string
+          enum: [Bearer]
+        expiresIn:
+          type: integer
+          description: Segundos de vida del access token.
+        user:
+          $ref: '#/components/schemas/User'
+      example:
+        accessToken: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMTExIn0.c2lnbmF0dXJh
+        refreshToken: 3q7Yc0v8aZ1bKx2mTn5rW9pLf4dHsGjE
+        tokenType: Bearer
+        expiresIn: 900
+        user:
+          id: 0f1e2d3c-4b5a-4968-8778-6655443322cc
+          email: manuel@example.com
+          name: Manuel
+          baseCurrency: UYU
+          locale: es-UY
+    User:
+      type: object
+      required: [id, email, name, baseCurrency, locale]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        baseCurrency:
+          $ref: '#/components/schemas/CurrencyCode'
+        locale:
+          type: string
+          example: es-UY
+      example:
+        id: 0f1e2d3c-4b5a-4968-8778-6655443322cc
+        email: manuel@example.com
+        name: Manuel
+        baseCurrency: UYU
+        locale: es-UY
+    UserUpdate:
+      type: object
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        baseCurrency:
+          $ref: '#/components/schemas/CurrencyCode'
+        locale:
+          type: string
+      example:
+        baseCurrency: USD
+
+    # ----- Monedas y cotizaciones -----
+    Currency:
+      type: object
+      required: [code, name, symbol, decimals]
+      properties:
+        code:
+          $ref: '#/components/schemas/CurrencyCode'
+        name:
+          type: string
+        symbol:
+          type: string
+        decimals:
+          type: integer
+          minimum: 0
+          maximum: 4
+    ExchangeRate:
+      type: object
+      required: [id, fromCurrency, toCurrency, rate, rateDate, source]
+      properties:
+        id:
+          type: string
+          format: uuid
+        fromCurrency:
+          $ref: '#/components/schemas/CurrencyCode'
+        toCurrency:
+          $ref: '#/components/schemas/CurrencyCode'
+        rate:
+          $ref: '#/components/schemas/Rate'
+        rateDate:
+          type: string
+          format: date
+        source:
+          $ref: '#/components/schemas/ExchangeRateSource'
+    ExchangeRateUpsert:
+      type: object
+      required: [fromCurrency, toCurrency, rate, rateDate]
+      properties:
+        fromCurrency:
+          $ref: '#/components/schemas/CurrencyCode'
+        toCurrency:
+          $ref: '#/components/schemas/CurrencyCode'
+        rate:
+          $ref: '#/components/schemas/PositiveMoney'
+        rateDate:
+          type: string
+          format: date
+        source:
+          $ref: '#/components/schemas/ExchangeRateSource'
+          default: MANUAL
+      example:
+        fromCurrency: USD
+        toCurrency: UYU
+        rate: '40.12500000'
+        rateDate: '2026-10-07'
+        source: MANUAL
+
+    # ----- Cuentas -----
+    Account:
+      type: object
+      required: [id, name, type, currency, initialBalance, initialBalanceDate, includeInTotal, sortOrder, balance, version]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        type:
+          $ref: '#/components/schemas/AccountType'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        initialBalance:
+          $ref: '#/components/schemas/Money'
+        initialBalanceDate:
+          type: string
+          format: date
+        color:
+          $ref: '#/components/schemas/ColorKey'
+        icon:
+          $ref: '#/components/schemas/IconName'
+        includeInTotal:
+          type: boolean
+        sortOrder:
+          type: integer
+        archivedAt:
+          type: string
+          format: date-time
+          nullable: true
+        balance:
+          allOf:
+            - $ref: '#/components/schemas/Money'
+          readOnly: true
+          description: Saldo derivado (`initialBalance` + suma de movimientos no anulados), en la moneda de la cuenta.
+        version:
+          type: integer
+          minimum: 0
+    AccountCreate:
+      type: object
+      required: [name, type, currency, initialBalanceDate]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 60
+        type:
+          $ref: '#/components/schemas/AccountType'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        initialBalance:
+          $ref: '#/components/schemas/Money'
+          default: '0'
+        initialBalanceDate:
+          type: string
+          format: date
+        color:
+          $ref: '#/components/schemas/ColorKey'
+        icon:
+          $ref: '#/components/schemas/IconName'
+        includeInTotal:
+          type: boolean
+          default: true
+        sortOrder:
+          type: integer
+          default: 0
+    AccountUpdate:
+      type: object
+      required: [version]
+      properties:
+        version:
+          type: integer
+          minimum: 0
+        name:
+          type: string
+          minLength: 1
+          maxLength: 60
+        type:
+          $ref: '#/components/schemas/AccountType'
+        currency:
+          $ref: '#/components/schemas/CurrencyCode'
+        initialBalance:
+          $ref: '#/components/schemas/Money'
+        initialBalanceDate:
+          type: string
+          format: date
+        color:
+          $ref: '#/components/schemas/ColorKey'
+        icon:
+          $ref: '#/components/schemas/IconName'
+        includeInTotal:
+          type: boolean
+        sortOrder:
+          type: integer
+
+    # ----- Categorías y etiquetas -----
+    Category:
+      type: object
+      required: [id, name, kind, sortOrder]
+      properties:
+        id:
+          type: string
+          format: uuid
+        parentId:
+          type: string
+          format: uuid
+          nullable: true
+        name:
+          type: string
+        kind:
+          $ref: '#/components/schemas/CategoryKind'
+        color:
+          $ref: '#/components/schemas/ColorKey'
+        icon:
+          $ref: '#/components/schemas/IconName'
+        sortOrder:
+          type: integer
+        archivedAt:
+          type: string
+          format: date-time
+          nullable: true
+      example:
+        id: 1e2d3c4b-5a69-4788-9900-aabbccddeeff
+        parentId: null
+        name: Supermercado
+        kind: EXPENSE
+        color: null
+        icon: shopping-cart
+        sortOrder: 1
+        archivedAt: null
+    CategoryCreate:
+      type: object
+      required: [name, kind]
+      properties:
+        parentId:
+          type: string
+          format: uuid
+          description: Si se informa, la categoría es una subcategoría (máximo 2 niveles, mismo `kind` que el padre).
+        name:
+          type: string
+          minLength: 1
+          maxLength: 60
+        kind:
+          $ref: '#/components/schemas/CategoryKind'
+        color:
+          $ref: '#/components/schemas/ColorKey'
+        icon:
+          $ref: '#/components/schemas/IconName'
+        sortOrder:
+          type: integer
+          default: 0
+    CategoryUpdate:
+      type: object
+      minProperties: 1
+      properties:
+        parentId:
+          type: string
+          format: uuid
+          nullable: true
+        name:
+          type: string
+          minLength: 1
+          maxLength: 60
+        kind:
+          $ref: '#/components/schemas/CategoryKind'
+        color:
+          $ref: '#/components/schemas/ColorKey'
+        icon:
+          $ref: '#/components/schemas/IconName'
+        sortOrder:
+          type: integer
+    Tag:
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+      example:
+        id: 7e8f9a0b-1c2d-4e3f-8a5b-6c7d8e9f0a1b
+        name: viaje
+    TagCreate:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 40
+
+    # ----- Movimientos -----
+    Transaction:
+      type: object
+      description: Movimiento. El `amount` viene con el signo con que está guardado.
+      required: [id, accountId, type, amount, occurredOn, tagIds, version, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        accountId:
+          type: string
+          format: uuid
+        type:
+          $ref: '#/components/schemas/TransactionType'
+        amount:
+          $ref: '#/components/schemas/Money'
+        categoryId:
+          type: string
+          format: uuid
+          nullable: true
+        transferId:
+          type: string
+          format: uuid
+          nullable: true
+        recurringOccurrenceId:
+          type: string
+          format: uuid
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        note:
+          type: string
+          nullable: true
+        occurredOn:
+          type: string
+          format: date
+        tagIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        voidedAt:
+          type: string
+          format: date-time
+          nullable: true
+        voidReason:
+          type: string
+          nullable: true
+        version:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    TransactionCreate:
+      type: object
+      required: [id, accountId, type, amount, occurredOn]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Generado por el cliente. Clave de idempotencia.
+        accountId:
+          type: string
+          format: uuid
+        type:
+          type: string
+          enum: [EXPENSE, INCOME, ADJUSTMENT]
+        amount:
+          type: string
+          description: Positivo en `EXPENSE` e `INCOME`; con signo y distinto de cero en `ADJUSTMENT`.
+          pattern: '^-?\d{1,15}(\.\d{1,4})?$'
+        categoryId:
+          type: string
+          format: uuid
+          description: Obligatoria para `EXPENSE` e `INCOME`; prohibida para `ADJUSTMENT`.
+        description:
+          type: string
+          maxLength: 200
+        note:
+          type: string
+          maxLength: 2000
+        occurredOn:
+          type: string
+          format: date
+        tagIds:
+          type: array
+          maxItems: 10
+          items:
+            type: string
+            format: uuid
+          default: []
+    TransactionUpdate:
+      type: object
+      required: [version]
+      properties:
+        version:
+          type: integer
+          minimum: 0
+        accountId:
+          type: string
+          format: uuid
+        amount:
+          type: string
+          pattern: '^-?\d{1,15}(\.\d{1,4})?$'
+          description: Con el mismo criterio de signo que la creación.
+        categoryId:
+          type: string
+          format: uuid
+          nullable: true
+        description:
+          type: string
+          maxLength: 200
+          nullable: true
+        note:
+          type: string
+          maxLength: 2000
+          nullable: true
+        occurredOn:
+          type: string
+          format: date
+        tagIds:
+          type: array
+          maxItems: 10
+          items:
+            type: string
+            format: uuid
+    TransactionPage:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Transaction'
+        nextCursor:
+          type: string
+          nullable: true
+          description: "`null` cuando no hay más páginas."
+    VoidRequest:
+      type: object
+      required: [version]
+      properties:
+        version:
+          type: integer
+          minimum: 0
+        reason:
+          type: string
+          maxLength: 200
+    VersionRequest:
+      type: object
+      required: [version]
+      properties:
+        version:
+          type: integer
+          minimum: 0
+      example:
+        version: 0
+
+    # ----- Transferencias -----
+    Transfer:
+      type: object
+      required: [id, fromAccountId, toAccountId, fromAmount, toAmount, occurredOn, outTransactionId, inTransactionId, version, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        fromAccountId:
+          type: string
+          format: uuid
+        toAccountId:
+          type: string
+          format: uuid
+        fromAmount:
+          $ref: '#/components/schemas/Money'
+        toAmount:
+          $ref: '#/components/schemas/Money'
+        exchangeRate:
+          type: string
+          nullable: true
+          pattern: '^\d{1,11}(\.\d{1,8})?$'
+          example: '40.12500000'
+          description: Null cuando las dos cuentas tienen la misma moneda.
+        occurredOn:
+          type: string
+          format: date
+        description:
+          type: string
+          nullable: true
+        voidedAt:
+          type: string
+          format: date-time
+          nullable: true
+        outTransactionId:
+          type: string
+          format: uuid
+        inTransactionId:
+          type: string
+          format: uuid
+        version:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+    TransferCreate:
+      type: object
+      required: [id, fromAccountId, toAccountId, fromAmount, toAmount, occurredOn]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Generado por el cliente. Clave de idempotencia.
+        fromAccountId:
+          type: string
+          format: uuid
+        toAccountId:
+          type: string
+          format: uuid
+        fromAmount:
+          $ref: '#/components/schemas/PositiveMoney'
+        toAmount:
+          $ref: '#/components/schemas/PositiveMoney'
+        exchangeRate:
+          $ref: '#/components/schemas/Rate'
+          description: Obligatorio si las monedas son distintas. Prohibido si son la misma.
+        occurredOn:
+          type: string
+          format: date
+        description:
+          type: string
+          maxLength: 200
+
+    # ----- Recurrentes -----
+    RecurringRule:
+      type: object
+      required: [id, name, kind, accountId, categoryId, amount, isEstimate, frequency, intervalCount, startDate, nextDueDate, active, autoConfirm, version]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        kind:
+          $ref: '#/components/schemas/CategoryKind'
+        accountId:
+          type: string
+          format: uuid
+        categoryId:
+          type: string
+          format: uuid
+        amount:
+          $ref: '#/components/schemas/PositiveMoney'
+        isEstimate:
+          type: boolean
+        frequency:
+          $ref: '#/components/schemas/RecurringFrequency'
+        intervalCount:
+          type: integer
+          minimum: 1
+        dayOfMonth:
+          type: integer
+          minimum: 1
+          maximum: 31
+          nullable: true
+        dayOfWeek:
+          type: integer
+          minimum: 1
+          maximum: 7
+          nullable: true
+          description: ISO 8601, 1 = lunes, 7 = domingo.
+        startDate:
+          type: string
+          format: date
+        endDate:
+          type: string
+          format: date
+          nullable: true
+        nextDueDate:
+          type: string
+          format: date
+        active:
+          type: boolean
+        autoConfirm:
+          type: boolean
+        version:
+          type: integer
+      example:
+        id: 2c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f
+        name: Alquiler
+        kind: EXPENSE
+        accountId: 3f9a1c2e-8b7d-4c6e-a5f4-0d1e2f3a4b5c
+        categoryId: 2c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f
+        amount: '28000.0000'
+        isEstimate: false
+        frequency: MONTHLY
+        intervalCount: 1
+        dayOfMonth: 31
+        dayOfWeek: null
+        startDate: '2026-01-31'
+        endDate: null
+        nextDueDate: '2026-10-31'
+        active: true
+        autoConfirm: false
+        version: 0
+    RecurringRuleCreate:
+      type: object
+      required: [name, kind, accountId, categoryId, amount, frequency, startDate]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 60
+        kind:
+          $ref: '#/components/schemas/CategoryKind'
+        accountId:
+          type: string
+          format: uuid
+        categoryId:
+          type: string
+          format: uuid
+        amount:
+          $ref: '#/components/schemas/PositiveMoney'
+        isEstimate:
+          type: boolean
+          default: false
+        frequency:
+          $ref: '#/components/schemas/RecurringFrequency'
+        intervalCount:
+          type: integer
+          minimum: 1
+          default: 1
+          description: Para `EVERY_N_DAYS`, cada cuántos días. Para `WEEKLY`, cada cuántas semanas.
+        dayOfMonth:
+          type: integer
+          minimum: 1
+          maximum: 31
+          description: Obligatorio en `MONTHLY` y `YEARLY`. Si el mes no tiene ese día, se usa el último.
+        dayOfWeek:
+          type: integer
+          minimum: 1
+          maximum: 7
+          description: Obligatorio en `WEEKLY`.
+        startDate:
+          type: string
+          format: date
+        endDate:
+          type: string
+          format: date
+        autoConfirm:
+          type: boolean
+          default: false
+    RecurringRuleUpdate:
+      type: object
+      required: [version]
+      properties:
+        version:
+          type: integer
+          minimum: 0
+        name:
+          type: string
+          minLength: 1
+          maxLength: 60
+        accountId:
+          type: string
+          format: uuid
+        categoryId:
+          type: string
+          format: uuid
+        amount:
+          $ref: '#/components/schemas/PositiveMoney'
+        isEstimate:
+          type: boolean
+        endDate:
+          type: string
+          format: date
+          nullable: true
+        active:
+          type: boolean
+        autoConfirm:
+          type: boolean
+      example:
+        version: 0
+        active: false
+    RecurringOccurrence:
+      type: object
+      required: [id, ruleId, ruleName, kind, dueDate, expectedAmount, isEstimate, status, overdue]
+      properties:
+        id:
+          type: string
+          format: uuid
+        ruleId:
+          type: string
+          format: uuid
+        ruleName:
+          type: string
+        kind:
+          $ref: '#/components/schemas/CategoryKind'
+        dueDate:
+          type: string
+          format: date
+        expectedAmount:
+          $ref: '#/components/schemas/PositiveMoney'
+        isEstimate:
+          type: boolean
+        status:
+          $ref: '#/components/schemas/OccurrenceStatus'
+        overdue:
+          type: boolean
+          readOnly: true
+          description: "Derivado: `PENDING` con `dueDate` anterior a hoy."
+        transactionId:
+          type: string
+          format: uuid
+          nullable: true
+        resolvedAt:
+          type: string
+          format: date-time
+          nullable: true
+    ConfirmOccurrenceRequest:
+      type: object
+      required: [transactionId]
+      properties:
+        transactionId:
+          type: string
+          format: uuid
+          description: Generado por el cliente. Clave de idempotencia del movimiento que se crea.
+        amount:
+          $ref: '#/components/schemas/PositiveMoney'
+          description: Monto real. Por defecto, `expectedAmount`.
+        accountId:
+          type: string
+          format: uuid
+          description: Por defecto, la cuenta de la regla.
+        categoryId:
+          type: string
+          format: uuid
+          description: Por defecto, la de la regla.
+        occurredOn:
+          type: string
+          format: date
+          description: Por defecto, `dueDate`.
+        note:
+          type: string
+          maxLength: 2000
+    ConfirmOccurrenceResponse:
+      type: object
+      required: [occurrence, transaction]
+      properties:
+        occurrence:
+          $ref: '#/components/schemas/RecurringOccurrence'
+        transaction:
+          $ref: '#/components/schemas/Transaction'
+
+    # ----- Dashboard -----
+    DashboardSummary:
+      type: object
+      required: [month, baseCurrency, netWorth, missingRates, thisMonth, upcoming, recentTransactions]
+      properties:
+        month:
+          type: string
+          example: '2026-10'
+        baseCurrency:
+          $ref: '#/components/schemas/CurrencyCode'
+        netWorth:
+          type: object
+          required: [amount, currency]
+          properties:
+            amount:
+              $ref: '#/components/schemas/Money'
+            currency:
+              $ref: '#/components/schemas/CurrencyCode'
+            changeVsPreviousMonth:
+              type: string
+              nullable: true
+              description: Variación porcentual contra el mes anterior, como string.
+        missingRates:
+          type: array
+          description: Cuentas que no se sumaron por falta de cotización.
+          items:
+            type: object
+            properties:
+              accountId:
+                type: string
+                format: uuid
+              currency:
+                $ref: '#/components/schemas/CurrencyCode'
+        thisMonth:
+          type: object
+          required: [income, expense, net, topCategories]
+          properties:
+            income:
+              $ref: '#/components/schemas/Money'
+            expense:
+              $ref: '#/components/schemas/Money'
+            net:
+              $ref: '#/components/schemas/Money'
+            topCategories:
+              type: array
+              maxItems: 3
+              items:
+                type: object
+                required: [categoryId, name, amount, share]
+                properties:
+                  categoryId:
+                    type: string
+                    format: uuid
+                  name:
+                    type: string
+                  amount:
+                    $ref: '#/components/schemas/Money'
+                  share:
+                    type: string
+                    description: Proporción sobre el total de gastos del mes, de 0 a 1.
+        upcoming:
+          type: array
+          maxItems: 5
+          items:
+            type: object
+            required: [id, ruleName, dueDate, expectedAmount, overdue]
+            properties:
+              id:
+                type: string
+                format: uuid
+              ruleName:
+                type: string
+              dueDate:
+                type: string
+                format: date
+              expectedAmount:
+                $ref: '#/components/schemas/PositiveMoney'
+              overdue:
+                type: boolean
+        recentTransactions:
+          type: array
+          maxItems: 5
+          items:
+            $ref: '#/components/schemas/Transaction'
+
+  responses:
+    ValidationError:
+      description: Datos inválidos.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.finanzas.local/problems/validation-error
+            title: Datos inválidos
+            status: 400
+            code: VALIDATION_ERROR
+            detail: La solicitud tiene errores de validación.
+            instance: /api/v1/transactions
+            errors:
+              - field: amount
+                message: debe ser un número con hasta 4 decimales
+              - field: categoryId
+                message: es obligatoria para EXPENSE
+    Unauthorized:
+      description: Falta el token o es inválido.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.finanzas.local/problems/unauthorized
+            title: No autenticado
+            status: 401
+            code: UNAUTHORIZED
+            detail: El access token es inválido o venció.
+    InvalidCredentials:
+      description: Email o contraseña incorrectos.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.finanzas.local/problems/invalid-credentials
+            title: Credenciales inválidas
+            status: 401
+            code: INVALID_CREDENTIALS
+            detail: Email o contraseña incorrectos.
+    NotFound:
+      description: No existe o pertenece a otro usuario.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.finanzas.local/problems/not-found
+            title: No encontrado
+            status: 404
+            code: NOT_FOUND
+            detail: No existe un recurso con ese identificador.
+    DuplicateName:
+      description: Ya existe un registro con ese nombre (cuentas no archivadas, categorías del mismo padre, etiquetas).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.finanzas.local/problems/duplicate-name
+            title: Nombre duplicado
+            status: 409
+            code: DUPLICATE_NAME
+            detail: Ya existe una cuenta con ese nombre.
+    VersionConflict:
+      description: La `version` enviada no coincide con la actual. Releer el recurso y reintentar.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.finanzas.local/problems/version-conflict
+            title: Conflicto de versión
+            status: 409
+            code: VERSION_CONFLICT
+            detail: El recurso fue modificado. La versión actual es 3.
+    IdReusedWithDifferentPayload:
+      description: Ese `id` ya existe para el usuario con otro contenido. No se sobrescribe.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.finanzas.local/problems/id-reused
+            title: ID reutilizado con otro contenido
+            status: 409
+            code: ID_REUSED_WITH_DIFFERENT_PAYLOAD
+            detail: Ya existe un movimiento con ese id y datos distintos.
+    DomainRuleViolation:
+      description: La solicitud es válida como formato pero viola una regla de dominio.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            cuenta_archivada:
+              summary: Cuenta archivada
+              value:
+                type: https://api.finanzas.local/problems/domain-rule-violation
+                title: Regla de dominio violada
+                status: 422
+                code: DOMAIN_RULE_VIOLATION
+                detail: La cuenta está archivada y no admite movimientos nuevos.
+            tipo_de_cambio:
+              summary: Falta tipo de cambio
+              value:
+                type: https://api.finanzas.local/problems/domain-rule-violation
+                title: Regla de dominio violada
+                status: 422
+                code: DOMAIN_RULE_VIOLATION
+                detail: Entre cuentas de distinta moneda el tipo de cambio es obligatorio.
