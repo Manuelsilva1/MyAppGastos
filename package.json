@@ -1,0 +1,17 @@
+{
+  "name": "finanzas-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "App de finanzas personales: app Expo (Android, iOS y web), API Spring Boot y paquete compartido.",
+  "workspaces": [
+    "apps/mobile-web",
+    "packages/shared"
+  ],
+  "scripts": {
+    "test": "npm test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=20.19.0"
+  }
+}
