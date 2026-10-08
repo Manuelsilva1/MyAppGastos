@@ -1355,6 +1355,7 @@ paths:
                     dueDate: '2026-10-31'
                     expectedAmount: '28000.0000'
                     overdue: false
+                    daysUntil: 24
                 recentTransactions: []
         '400':
           $ref: '#/components/responses/ValidationError'
@@ -2401,12 +2402,36 @@ components:
                   share:
                     type: string
                     description: Proporción sobre el total de gastos del mes, de 0 a 1.
+        accounts:
+          type: array
+          description: Cuentas no archivadas con su saldo derivado (para el carrusel de inicio).
+          items:
+            type: object
+            required: [id, name, type, currency, balance]
+            properties:
+              id:
+                type: string
+                format: uuid
+              name:
+                type: string
+              type:
+                $ref: '#/components/schemas/AccountType'
+              currency:
+                $ref: '#/components/schemas/CurrencyCode'
+              balance:
+                $ref: '#/components/schemas/Money'
+              icon:
+                type: string
+                nullable: true
+              color:
+                type: string
+                nullable: true
         upcoming:
           type: array
           maxItems: 5
           items:
             type: object
-            required: [id, ruleName, dueDate, expectedAmount, overdue]
+            required: [id, ruleName, dueDate, expectedAmount, overdue, daysUntil]
             properties:
               id:
                 type: string
@@ -2420,11 +2445,36 @@ components:
                 $ref: '#/components/schemas/PositiveMoney'
               overdue:
                 type: boolean
+              daysUntil:
+                type: integer
+                description: Días hasta el vencimiento (negativo si ya venció).
         recentTransactions:
           type: array
           maxItems: 5
           items:
-            $ref: '#/components/schemas/Transaction'
+            type: object
+            required: [id, type, amount, currency, accountName, occurredOn]
+            properties:
+              id:
+                type: string
+                format: uuid
+              description:
+                type: string
+                nullable: true
+              categoryName:
+                type: string
+                nullable: true
+              accountName:
+                type: string
+              type:
+                $ref: '#/components/schemas/TransactionType'
+              amount:
+                $ref: '#/components/schemas/Money'
+              currency:
+                $ref: '#/components/schemas/CurrencyCode'
+              occurredOn:
+                type: string
+                format: date
 
   responses:
     ValidationError:
