@@ -3,8 +3,11 @@ import { useState } from 'react';
 import { Stack } from 'expo-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { StatusBar } from 'expo-status-bar';
+import { useFonts, Inter_400Regular, Inter_600SemiBold, Inter_700Bold } from '@expo-google-fonts/inter';
 
 export default function RootLayout() {
+  // Inter cargada antes de pintar: sin esto, el texto usa la fuente del sistema.
+  const [fontsLoaded] = useFonts({ Inter_400Regular, Inter_600SemiBold, Inter_700Bold });
   // Una instancia por montaje: el cache de TanStack Query vive mientras la app esté abierta.
   const [queryClient] = useState(
     () =>
@@ -14,6 +17,10 @@ export default function RootLayout() {
         },
       }),
   );
+
+  if (!fontsLoaded) {
+    return null;
+  }
 
   return (
     <QueryClientProvider client={queryClient}>
