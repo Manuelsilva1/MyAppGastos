@@ -1,16 +1,9 @@
-# myapp
+# Gestor de Gastos
 
-A new Flutter project.
+Aplicación multiplataforma (móvil y web) para gestionar gastos por "Ambientes".
 
-## Getting Started
+El proyecto se va a desarrollar con **React Native**. La descripción funcional y el plan de trabajo están en [`blueprint.md`](./blueprint.md).
 
-This project is a starting point for a Flutter application.
+## Estado
 
-A few resources to get you started if this is your first Flutter project:
-
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+Repositorio limpio: se eliminó la implementación anterior en Flutter. Aún no hay código de la aplicación.

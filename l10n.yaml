@@ -1,3 +1,0 @@
-arb-dir: assets/translations
-template-arb-file: es.arb
-output-localization-file: app_localizations.dart
