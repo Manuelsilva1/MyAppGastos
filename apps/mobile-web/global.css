@@ -1,0 +1,36 @@
+/* Generado por scripts/build-theme-css.js a partir de src/theme/tokens.json. No editar a mano. */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-background: 246 245 241;
+  --color-surface: 255 255 255;
+  --color-surface-2: 239 237 231;
+  --color-border: 226 223 214;
+  --color-text: 26 29 26;
+  --color-text-muted: 107 111 104;
+  --color-primary: 31 95 74;
+  --color-on-primary: 255 255 255;
+  --color-income: 46 125 91;
+  --color-expense: 194 69 61;
+  --color-transfer: 74 111 165;
+  --color-pending: 201 138 18;
+  --color-danger: 179 38 30;
+}
+
+.dark {
+  --color-background: 17 20 18;
+  --color-surface: 26 30 27;
+  --color-surface-2: 35 40 35;
+  --color-border: 46 52 47;
+  --color-text: 236 237 232;
+  --color-text-muted: 156 161 154;
+  --color-primary: 95 191 152;
+  --color-on-primary: 13 31 24;
+  --color-income: 95 191 152;
+  --color-expense: 240 124 115;
+  --color-transfer: 143 176 224;
+  --color-pending: 242 196 109;
+  --color-danger: 242 184 181;
+}

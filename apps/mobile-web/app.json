@@ -1,0 +1,34 @@
+{
+  "expo": {
+    "name": "Finanzas",
+    "slug": "finanzas",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "finanzas",
+    "userInterfaceStyle": "automatic",
+    "icon": "./assets/icon.png",
+    "newArchEnabled": true,
+    "ios": {
+      "bundleIdentifier": "com.manuelsilva.finanzas",
+      "supportsTablet": false
+    },
+    "android": {
+      "package": "com.manuelsilva.finanzas",
+      "adaptiveIcon": {
+        "backgroundColor": "#F6F5F1"
+      }
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "static"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "expo-font"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
