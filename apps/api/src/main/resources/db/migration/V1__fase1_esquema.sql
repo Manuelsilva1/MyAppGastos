@@ -101,7 +101,8 @@ CREATE TABLE categories (
     archived_at TIMESTAMPTZ,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT uq_categories_user_parent_name UNIQUE (user_id, parent_id, name),
+    -- NULLS NOT DISTINCT (PostgreSQL 15+): las raíces también son únicas por (usuario, tipo, nombre)
+    CONSTRAINT uq_categories_user_parent_kind_name UNIQUE NULLS NOT DISTINCT (user_id, parent_id, kind, name),
     CONSTRAINT ck_categories_no_self_parent CHECK (parent_id IS NULL OR parent_id <> id)
 );
 CREATE INDEX ix_categories_user   ON categories (user_id);
@@ -218,8 +219,6 @@ CREATE TABLE transactions (
     amount                   NUMERIC(19,4) NOT NULL,
     category_id              UUID REFERENCES categories(id),
     transfer_id              UUID REFERENCES transfers(id),
-    -- La FK hacia recurring_occurrences se agrega después (dependencia circular)
-    recurring_occurrence_id  UUID,
     description              TEXT,
     note                     TEXT,
     occurred_on              DATE NOT NULL,
@@ -242,8 +241,6 @@ CREATE INDEX ix_tx_category         ON transactions (category_id);
 CREATE INDEX ix_tx_transfer         ON transactions (transfer_id);
 -- Cada transferencia tiene como máximo una salida y una entrada
 CREATE UNIQUE INDEX uq_tx_transfer_type ON transactions (transfer_id, type) WHERE transfer_id IS NOT NULL;
--- Cada ocurrencia recurrente se confirma una sola vez
-CREATE UNIQUE INDEX uq_tx_recurring_occurrence ON transactions (recurring_occurrence_id) WHERE recurring_occurrence_id IS NOT NULL;
 
 CREATE OR REPLACE FUNCTION transactions_check_refs() RETURNS trigger AS $$
 DECLARE
@@ -366,7 +363,7 @@ CREATE TABLE recurring_rules (
     is_estimate    BOOLEAN NOT NULL DEFAULT false,
     frequency      TEXT NOT NULL CHECK (frequency IN ('WEEKLY', 'MONTHLY', 'YEARLY', 'EVERY_N_DAYS')),
     interval_count INT NOT NULL DEFAULT 1 CHECK (interval_count >= 1),
-    day_of_month   SMALLINT CHECK (day_of_month BETWEEN 1 AND 31),
+    day_of_month   SMALLINT CHECK (day_of_month BETWEEN 1 AND 31),  -- YEARLY usa el mes de start_date
     day_of_week    SMALLINT CHECK (day_of_week BETWEEN 1 AND 7),  -- ISO: 1 = lunes, 7 = domingo
     start_date     DATE NOT NULL,
     end_date       DATE,
@@ -409,6 +406,7 @@ CREATE TRIGGER trg_recurring_rules_refs
 
 CREATE TABLE recurring_occurrences (
     id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id          UUID NOT NULL REFERENCES users(id),
     rule_id          UUID NOT NULL REFERENCES recurring_rules(id),
     due_date         DATE NOT NULL,
     expected_amount  NUMERIC(19,4) NOT NULL CHECK (expected_amount > 0),
@@ -421,10 +419,31 @@ CREATE TABLE recurring_occurrences (
     CONSTRAINT ck_ro_confirmed_has_tx CHECK (status <> 'CONFIRMED' OR transaction_id IS NOT NULL),
     CONSTRAINT ck_ro_resolved_at CHECK ((status = 'PENDING') = (resolved_at IS NULL))
 );
+CREATE INDEX ix_recurring_occurrences_user_due ON recurring_occurrences (user_id, due_date);
 
-ALTER TABLE transactions
-    ADD CONSTRAINT fk_transactions_recurring_occurrence
-    FOREIGN KEY (recurring_occurrence_id) REFERENCES recurring_occurrences(id);
+-- La ocurrencia y su movimiento deben ser del mismo usuario, y la ocurrencia debe ser de la regla del usuario
+CREATE OR REPLACE FUNCTION recurring_occurrences_check_refs() RETURNS trigger AS $$
+DECLARE
+    rule_owner UUID;
+    tx_owner   UUID;
+BEGIN
+    SELECT user_id INTO rule_owner FROM recurring_rules WHERE id = NEW.rule_id;
+    IF rule_owner <> NEW.user_id THEN
+        RAISE EXCEPTION 'La ocurrencia debe pertenecer al mismo usuario que su regla' USING ERRCODE = 'foreign_key_violation';
+    END IF;
+    IF NEW.transaction_id IS NOT NULL THEN
+        SELECT user_id INTO tx_owner FROM transactions WHERE id = NEW.transaction_id;
+        IF tx_owner <> NEW.user_id THEN
+            RAISE EXCEPTION 'El movimiento confirmado debe pertenecer al mismo usuario' USING ERRCODE = 'foreign_key_violation';
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_recurring_occurrences_refs
+    BEFORE INSERT OR UPDATE ON recurring_occurrences
+    FOR EACH ROW EXECUTE FUNCTION recurring_occurrences_check_refs();
 
 -- ---------------------------------------------------------------------
 -- Auditoría (append-only)

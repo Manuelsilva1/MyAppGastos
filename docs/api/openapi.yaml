@@ -729,7 +729,6 @@ paths:
                     amount: '-450.0000'
                     categoryId: 1e2d3c4b-5a69-4788-9900-aabbccddeeff
                     transferId: null
-                    recurringOccurrenceId: null
                     description: Supermercado Tienda Inglesa
                     note: null
                     occurredOn: '2026-10-07'
@@ -790,7 +789,6 @@ paths:
                 amount: '-450.0000'
                 categoryId: 1e2d3c4b-5a69-4788-9900-aabbccddeeff
                 transferId: null
-                recurringOccurrenceId: null
                 description: null
                 note: null
                 occurredOn: '2026-10-07'
@@ -1239,7 +1237,6 @@ paths:
                   type: EXPENSE
                   amount: '-28450.0000'
                   categoryId: 2c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f
-                  recurringOccurrenceId: 2e3f4a5b-6c7d-4e8f-9a0b-1c2d3e4f5a6b
                   transferId: null
                   description: null
                   note: null
@@ -1916,10 +1913,6 @@ components:
           type: string
           format: uuid
           nullable: true
-        recurringOccurrenceId:
-          type: string
-          format: uuid
-          nullable: true
         description:
           type: string
           nullable: true
@@ -2231,7 +2224,7 @@ components:
           type: integer
           minimum: 1
           maximum: 31
-          description: Obligatorio en `MONTHLY` y `YEARLY`. Si el mes no tiene ese día, se usa el último.
+          description: Obligatorio en `MONTHLY` y `YEARLY`. Si el mes no tiene ese día, se usa el último. En `YEARLY` el mes es el de `startDate`.
         dayOfWeek:
           type: integer
           minimum: 1

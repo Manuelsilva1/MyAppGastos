@@ -120,7 +120,6 @@ erDiagram
         numeric amount "19,4, con signo"
         uuid category_id FK "nullable"
         uuid transfer_id FK "nullable"
-        uuid recurring_occurrence_id FK "nullable"
         date occurred_on
         timestamptz voided_at
         text void_reason
@@ -153,6 +152,7 @@ erDiagram
 
     RECURRING_OCCURRENCES {
         uuid id PK
+        uuid user_id FK
         uuid rule_id FK
         date due_date "UK con rule_id"
         numeric expected_amount "19,4"
@@ -184,8 +184,9 @@ erDiagram
 | Una transferencia tiene exactamente una salida y una entrada que coinciden con sus montos y cuentas | Trigger diferido `trg_transfers_pair` / `trg_transactions_pair` (se evalúa al COMMIT) |
 | Transferencia en la misma moneda: `from_amount = to_amount` y `exchange_rate` NULL; en distinta moneda, `exchange_rate` obligatorio | Trigger `trg_transfers_accounts` |
 | Máximo 2 niveles de categorías y la subcategoría tiene el tipo de su padre | Trigger `trg_categories_hierarchy` |
-| Cada ocurrencia recurrente se confirma una sola vez y cada transacción apunta a una sola ocurrencia | Índices únicos parciales y `UNIQUE` en `recurring_occurrences.transaction_id` |
+| Nombre de categoría único por usuario, tipo y padre, también en raíces | `UNIQUE NULLS NOT DISTINCT` (PostgreSQL 15+) |
+| Cada ocurrencia recurrente se confirma con un solo movimiento, y un movimiento no se vincula a dos ocurrencias | `UNIQUE` en `recurring_occurrences.transaction_id` (única fuente del vínculo) |
 | Una ocurrencia `CONFIRMED` tiene transacción vinculada | `CHECK` en `recurring_occurrences` |
-| Entidades de un usuario no referencian datos de otro usuario | Triggers `transactions_check_refs`, `transfers_check_accounts`, `recurring_rules_check_refs`, `categories_check_hierarchy` |
+| Entidades de un usuario no referencian datos de otro usuario | Triggers `transactions_check_refs`, `transfers_check_accounts`, `recurring_rules_check_refs`, `recurring_occurrences_check_refs`, `categories_check_hierarchy` |
 | `audit_log` es solo de inserción | Trigger `trg_audit_log_immutable` |
 | Saldo derivado: `initial_balance + SUM(amount)` de los movimientos no anulados | Vista `v_account_balances` (V3) |
