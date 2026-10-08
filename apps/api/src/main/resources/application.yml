@@ -21,6 +21,9 @@ server:
 
 app:
   base-path: /api/v1
+  cors:
+    # Orígenes de la web, separados por coma. Agregar el dominio de Vercel en producción.
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:8081,http://localhost:19006,http://localhost:8080}
   jwt:
     # Obligatorio en producción. El valor por defecto es solo para desarrollo local.
     secret: ${JWT_SECRET:dev-only-secret-cambiar-en-produccion-0123456789}
